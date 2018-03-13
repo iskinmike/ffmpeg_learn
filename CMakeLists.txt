@@ -32,10 +32,11 @@ set(LIBS
 #  ${AVCONV_PATH}/libavcodec-ffmpeg.so
 #  avformat
 #  avutil
-  avcodec
   avformat
-  avutil
+  avcodec
   swscale
+  swresample
+  avutil
   SDL2
 #  /lib/x86_64-linux-gnu/libbz2.so.1
 
