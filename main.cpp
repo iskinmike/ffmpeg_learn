@@ -1,155 +1,200 @@
 
+
+// tutorial01.c
+//
+// This tutorial was written by Stephen Dranger (dranger@gmail.com).
+//
+// Code based on a tutorial by Martin Bohme (boehme@inb.uni-luebeckREMOVETHIS.de)
+// Tested on Gentoo, CVS version 5/01/07 compiled with GCC 4.1.1
+
+// A small sample program that shows how to use libavformat and libavcodec to
+// read video from a file.
+//
+// Use the Makefile to build all examples.
+//
+// Run using
+//
+// tutorial01 myvideofile.mpg
+//
+// to write the first five frames from "myvideofile.mpg" to disk in PPM
+// format.
+
 extern "C" { // based on: https://stackoverflow.com/questions/24487203/ffmpeg-undefined-reference-to-avcodec-register-all-does-not-link
 #include <libavcodec/avcodec.h>
-}
-
 #include <libavformat/avformat.h>
 #include <libswscale/swscale.h>
-
-
-const int INBUF_SIZE = 1024*4;
-void test();
-
-static void pgm_save(unsigned char *buf, int wrap, int xsize, int ysize,
-                      char *filename)
-{
-    FILE *f;
-    int i;
-
-    f=fopen(filename,"w");
-    fprintf(f,"P5\n%d %d\n%d\n",xsize,ysize,255);
-    for(i=0;i<ysize;i++)
-     fwrite(buf + i * wrap,1,xsize,f);
-    fclose(f);
 }
 
+#include <SDL2/SDL.h>
+#include <SDL2/SDL_thread.h>
 
-int main()
-{
-     /* register all the codecs */
-    avcodec_register_all();
-    test();
+#include <stdio.h>
 
+void SaveFrame(AVFrame *pFrame, int width, int height, int iFrame) {
+  FILE *pFile;
+  char szFilename[32];
+  int  y;
+
+  // Open file
+  sprintf(szFilename, "frame%d.ppm", iFrame);
+  pFile=fopen(szFilename, "wb");
+  if(pFile==NULL)
+    return;
+
+  // Write header
+  fprintf(pFile, "P6\n%d %d\n255\n", width, height);
+
+  // Write pixel data
+  for(y=0; y<height; y++)
+    fwrite(pFrame->data[0]+y*pFrame->linesize[0], 1, width*3, pFile);
+
+  // Close file
+  fclose(pFile);
 }
 
-void test(){
-    const char* filename = "test.video";
-    const char* outfilename = "out.video";
-    AVCodec *codec;
-    AVCodecContext *c= NULL;
-    AVDictionary* dict;
-    int frame, got_picture, len;
-    FILE *f;
-    AVFrame *picture;
-    uint8_t inbuf[INBUF_SIZE + FF_INPUT_BUFFER_PADDING_SIZE];
-    char buf[1024];
-    AVPacket avpkt;
+int main(int argc, char *argv[]) {
+  AVFormatContext *pFormatCtx = NULL;
+  int             i, videoStream;
+  AVCodecContext  *pCodecCtx = NULL;
+  AVCodec         *pCodec = NULL;
+  AVFrame         *pFrame = NULL;
+  AVFrame         *pFrameRGB = NULL;
+  AVPacket        packet;
+  int             frameFinished;
+  int             numBytes;
+  uint8_t         *buffer = NULL;
 
-    av_init_packet(&avpkt);
+  AVDictionary    *optionsDict = NULL;
+  struct SwsContext      *sws_ctx = NULL;
 
-    /* set end of buffer to 0 (this ensures that no overreading happens for damaged mpeg streams) */
-    memset(inbuf + INBUF_SIZE, 0, FF_INPUT_BUFFER_PADDING_SIZE);
+  if(argc < 2) {
+    printf("Please provide a movie file\n");
+    return -1;
+  }
 
-    printf("Video decoding\n");
+  // SDL
+  if(SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_TIMER)) {
+    fprintf(stderr, "Could not initialize SDL - %s\n", SDL_GetError());
+    exit(1);
+  }
 
-    /* find the mpeg1 video decoder */
-    codec = avcodec_find_decoder(AV_CODEC_ID_H264);
-    if (!codec) {
-        fprintf(stderr, "codec not found\n");
-        exit(1);
+  // Register all formats and codecs
+  av_register_all();
+
+  // Open video file
+  if(avformat_open_input(&pFormatCtx, argv[1], NULL, NULL)!=0)
+    return -1; // Couldn't open file
+
+  // Retrieve stream information
+  if(avformat_find_stream_info(pFormatCtx, NULL)<0)
+    return -1; // Couldn't find stream information
+
+  // Dump information about file onto standard error
+  av_dump_format(pFormatCtx, 0, argv[1], 0);
+
+  // Find the first video stream
+  videoStream=-1;
+  for(i=0; i<pFormatCtx->nb_streams; i++)
+    if(pFormatCtx->streams[i]->codec->codec_type==AVMEDIA_TYPE_VIDEO) {
+      videoStream=i;
+      break;
+    }
+  if(videoStream==-1)
+    return -1; // Didn't find a video stream
+
+  // Get a pointer to the codec context for the video stream
+  pCodecCtx=pFormatCtx->streams[videoStream]->codec;
+
+  // Find the decoder for the video stream
+  pCodec=avcodec_find_decoder(pCodecCtx->codec_id);
+  if(pCodec==NULL) {
+    fprintf(stderr, "Unsupported codec!\n");
+    return -1; // Codec not found
+  }
+  // Open codec
+  if(avcodec_open2(pCodecCtx, pCodec, &optionsDict)<0)
+    return -1; // Could not open codec
+
+  // Allocate video frame
+  pFrame=av_frame_alloc();
+
+  // Allocate an AVFrame structure
+  pFrameRGB=av_frame_alloc();
+  if(pFrameRGB==NULL)
+    return -1;
+
+  // Determine required buffer size and allocate buffer
+  numBytes=avpicture_get_size(PIX_FMT_RGB24, pCodecCtx->width,
+                  pCodecCtx->height);
+  buffer=(uint8_t *)av_malloc(numBytes*sizeof(uint8_t));
+
+  sws_ctx =
+    sws_getContext
+    (
+        pCodecCtx->width,
+        pCodecCtx->height,
+        pCodecCtx->pix_fmt,
+        pCodecCtx->width,
+        pCodecCtx->height,
+        PIX_FMT_RGB24,
+        SWS_BILINEAR,
+        NULL,
+        NULL,
+        NULL
+    );
+
+  // Assign appropriate parts of buffer to image planes in pFrameRGB
+  // Note that pFrameRGB is an AVFrame, but AVFrame is a superset
+  // of AVPicture
+  avpicture_fill((AVPicture *)pFrameRGB, buffer, PIX_FMT_RGB24,
+         pCodecCtx->width, pCodecCtx->height);
+
+  // Read frames and save first five frames to disk
+  i=0;
+  while(av_read_frame(pFormatCtx, &packet)>=0) {
+    // Is this a packet from the video stream?
+    if(packet.stream_index==videoStream) {
+      // Decode video frame
+      avcodec_decode_video2(pCodecCtx, pFrame, &frameFinished,
+               &packet);
+
+      // Did we get a video frame?
+      if(frameFinished) {
+    // Convert the image from its native format to RGB
+        sws_scale
+        (
+            sws_ctx,
+            (uint8_t const * const *)pFrame->data,
+            pFrame->linesize,
+            0,
+            pCodecCtx->height,
+            pFrameRGB->data,
+            pFrameRGB->linesize
+        );
+
+    // Save the frame to disk
+    if(++i<=5)
+      SaveFrame(pFrameRGB, pCodecCtx->width, pCodecCtx->height,
+            i);
+      }
     }
 
-    c = avcodec_alloc_context3(codec);
-//    picture = avcodec_alloc_frame();
-    picture = av_frame_alloc();
+    // Free the packet that was allocated by av_read_frame
+    av_free_packet(&packet);
+  }
 
-    if(codec->capabilities&CODEC_CAP_TRUNCATED)
-        c->flags|= CODEC_FLAG_TRUNCATED; /* we do not send complete frames */
+  // Free the RGB image
+  av_free(buffer);
+  av_free(pFrameRGB);
 
-    /* For some codecs, such as msmpeg4 and mpeg4, width and height
-       MUST be initialized there because this information is not
-       available in the bitstream. */
+  // Free the YUV frame
+  av_free(pFrame);
 
-    /* open it */
-    if (avcodec_open2(c, codec, &dict) < 0) {
-        fprintf(stderr, "could not open codec\n");
-        exit(1);
-    }
+  // Close the codec
+  avcodec_close(pCodecCtx);
 
-    /* the codec gives us the frame size, in samples */
+  // Close the video file
+  avformat_close_input(&pFormatCtx);
 
-    f = fopen(filename, "rb");
-    if (!f) {
-        fprintf(stderr, "could not open %s\n", filename);
-        exit(1);
-    }
-
-    frame = 0;
-    for(;;) {
-        avpkt.size = fread(inbuf, 1, INBUF_SIZE, f);
-        if (avpkt.size == 0)
-            break;
-
-        /* NOTE1: some codecs are stream based (mpegvideo, mpegaudio)
-           and this is the only method to use them because you cannot
-           know the compressed data size before analysing it.
-
-           BUT some other codecs (msmpeg4, mpeg4) are inherently frame
-           based, so you must call them with all the data for one
-           frame exactly. You must also initialize 'width' and
-           'height' before initializing them. */
-
-        /* NOTE2: some codecs allow the raw parameters (frame size,
-           sample rate) to be changed at any frame. We handle this, so
-           you should also take care of it */
-
-        /* here, we use a stream based decoder (mpeg1video), so we
-           feed decoder and see if it could decode a frame */
-        avpkt.data = inbuf;
-        while (avpkt.size > 0) {
-            len = avcodec_decode_video2(c, picture, &got_picture, &avpkt);
-            if (len < 0) {
-                fprintf(stderr, "Error while decoding frame %d\n", frame);
-                exit(1);
-            }
-            if (got_picture) {
-                printf("saving frame %3d\n", frame);
-                fflush(stdout);
-
-                /* the picture is allocated by the decoder. no need to
-                   free it */
-                snprintf(buf, sizeof(buf), outfilename, frame);
-                pgm_save(picture->data[0], picture->linesize[0],
-                         c->width, c->height, buf);
-                frame++;
-            }
-            avpkt.size -= len;
-            avpkt.data += len;
-        }
-    }
-
-    /* some codecs, such as MPEG, transmit the I and P frame with a
-       latency of one frame. You must do the following to have a
-       chance to get the last frame of the video */
-    avpkt.data = NULL;
-    avpkt.size = 0;
-    len = avcodec_decode_video2(c, picture, &got_picture, &avpkt);
-    if (got_picture) {
-        printf("saving last frame %3d\n", frame);
-        fflush(stdout);
-
-        /* the picture is allocated by the decoder. no need to
-           free it */
-        snprintf(buf, sizeof(buf), outfilename, frame);
-        pgm_save(picture->data[0], picture->linesize[0],
-                 c->width, c->height, buf);
-        frame++;
-    }
-
-    fclose(f);
-
-    avcodec_close(c);
-    av_free(c);
-    av_free(picture);
-    printf("\n");
+  return 0;
 }

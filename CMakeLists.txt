@@ -33,16 +33,17 @@ set(LIBS
 #  avformat
 #  avutil
   avcodec
+  avformat
+  avutil
+  swscale
+  SDL2
+#  /lib/x86_64-linux-gnu/libbz2.so.1
 
 #  ${AVCONV_PATH}/libavdevice-ffmpeg.so.56
-  avutil
 #  avcodec
-  avformat
 #  avdevice
 #  avfilter
 #  avresample
-#  /lib/x86_64-linux-gnu/libbz2.so.1
-#  swscale
 #  swresample
 #  postproc
   )
