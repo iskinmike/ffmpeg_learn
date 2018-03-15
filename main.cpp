@@ -207,7 +207,8 @@ static void video_encode_example(const char *filename)
     printf("Video encoding\n");
 
     /* find the mpeg1 video encoder */
-    codec = avcodec_find_encoder(AV_CODEC_ID_MPEG1VIDEO);
+//    codec = avcodec_find_encoder(AV_CODEC_ID_MPEG1VIDEO);
+    codec = avcodec_find_encoder(AV_CODEC_ID_H264);
     if (!codec) {
         fprintf(stderr, "codec not found\n");
         exit(1);
@@ -224,7 +225,7 @@ static void video_encode_example(const char *filename)
     /* frames per second */
     c->time_base= (AVRational){1,25};
     c->gop_size = 10; /* emit one intra frame every ten frames */
-    c->max_b_frames=1;
+    c->max_b_frames=0;
     c->pix_fmt = AV_PIX_FMT_YUV420P;
 
     /* open it */
@@ -272,18 +273,36 @@ static void video_encode_example(const char *filename)
         }
 
         /* encode the image */
-        out_size = avcodec_encode_video(c, outbuf, outbuf_size, picture);
-        printf("encoding frame %3d (size=%5d)\n", i, out_size);
-        fwrite(outbuf, 1, out_size, f);
+//        out_size = avcodec_encode_video(c, outbuf, outbuf_size, picture);
+//        printf("encoding frame %3d (size=%5d)\n", i, out_size);
+//        fwrite(outbuf, 1, out_size, f);
+        int got_pack = 0;
+        AVPacket tmp_pack;
+        av_init_packet(&tmp_pack);
+        tmp_pack.data = NULL; // for autoinit
+        tmp_pack.size = 0;
+        out_size = avcodec_encode_video2(c, &tmp_pack, picture, &got_pack);
+
+        printf("encoding frame %3d (size=%5d)  ---  pack size [%x]\n", i, out_size, tmp_pack.size);
+        fwrite(tmp_pack.data, 1, tmp_pack.size, f);
     }
 
     /* get the delayed frames */
     for(; out_size; i++) {
         fflush(stdout);
 
-        out_size = avcodec_encode_video(c, outbuf, outbuf_size, NULL);
+//        out_size = avcodec_encode_video(c, outbuf, outbuf_size, NULL);
+//        printf("write frame %3d (size=%5d)\n", i, out_size);
+//        fwrite(outbuf, 1, out_size, f);
+
+        int got_pack = 0;
+        AVPacket tmp_pack;
+        av_init_packet(&tmp_pack);
+        tmp_pack.data = NULL; // for autoinit
+        tmp_pack.size = 0;
+        out_size = avcodec_encode_video2(c, &tmp_pack, NULL, &got_pack);
         printf("write frame %3d (size=%5d)\n", i, out_size);
-        fwrite(outbuf, 1, out_size, f);
+        fwrite(tmp_pack.data, 1, tmp_pack.size, f);
     }
 
     /* add sequence end code to have a real mpeg file */
