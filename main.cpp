@@ -37,6 +37,11 @@ extern "C" {
 /*
  * Audio encoding example
  */
+int pts = 0;
+int nextPts(){
+    return ++pts;
+}
+
 static void audio_encode_example(const char *filename)
 {
     AVCodec *codec;
@@ -254,8 +259,10 @@ static void video_encode_example(const char *filename)
     picture->linesize[2] = c->width / 2;
 
     /* encode 1 second of video */
-    for(i=0;i<25;i++) {
+    for(i=0;i<250;i++) {
         fflush(stdout);
+        picture->pts = nextPts();
+        printf("pts [%d]", picture->pts);
         /* prepare a dummy image */
         /* Y */
         for(y=0;y<c->height;y++) {
