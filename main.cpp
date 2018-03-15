@@ -71,6 +71,10 @@ void SaveFrame(AVFrame *pFrame, int width, int height, int iFrame) {
   fclose(pFile);
 }
 
+uint64_t g_pts = 0;
+uint64_t getNextPts(){
+    return g_pts++;
+};
 
 
 int main(int argc, char *argv[]){
@@ -238,14 +242,15 @@ int main(int argc, char *argv[]){
     outbuf = new uint8_t[numBytes*sizeof(uint8_t)];
 
     pEncodeCodec = avcodec_find_encoder(AV_CODEC_ID_H264);
+//    pEncodeCodec = avcodec_find_encoder(AV_CODEC_ID_MPEG4);
     if (!pEncodeCodec) {
         fprintf(stderr, "codec not found\n");
         exit(1);
     }
     pEncodeCodecCtx = avcodec_alloc_context3(pEncodeCodec);
-    pEncodeCodecCtx->codec_id = AV_CODEC_ID_H264;
-    pEncodeCodecCtx->codec_type = AVMEDIA_TYPE_VIDEO;
-    pEncodeCodecCtx->gop_size = 10;//pCodecCtx->gop_size;
+//    pEncodeCodecCtx->codec_id = AV_CODEC_ID_H264;
+//    pEncodeCodecCtx->codec_type = AVMEDIA_TYPE_VIDEO;
+    pEncodeCodecCtx->gop_size = 30;//pCodecCtx->gop_size;
     pEncodeCodecCtx->bit_rate = pCodecCtx->bit_rate;
     pEncodeCodecCtx->width = pCodecCtx->width;
     pEncodeCodecCtx->height = pCodecCtx->height;
@@ -290,7 +295,7 @@ int main(int argc, char *argv[]){
 //    std::vector<AVPacket> pkt_queue;
 
     printf("Ready to code/decode video\n");
-    for (int i=0; i< 1000; ++i){
+    for (int i=0; i< 300; ++i){
         av_read_frame(pFormatCtx, &packet);
         printf("av_read_frame complete\n");
         //    while(av_read_frame(pFormatCtx, &packet)>=0) {
@@ -330,7 +335,9 @@ int main(int argc, char *argv[]){
                  }
                 }
 
+//                pFrame->pts = getNextPts();
 //                frame->pts = pFrame->pts;
+                frame->pts = getNextPts();
 //                av_frame_copy(frame, pFrame);
                 printf("frame settings: \n\
                     data:[%p]\n\
@@ -351,6 +358,7 @@ int main(int argc, char *argv[]){
                     linesize[0]:[%d]\n\
                     linesize[1]:[%d]\n\
                     linesize[2]:[%d]\n\
+                    pts:[%d]\n\
                 \n",
                 (uint8_t*) pFrame->data,
                 (uint8_t*) pFrame->data[0],
@@ -358,7 +366,8 @@ int main(int argc, char *argv[]){
                 (uint8_t*) pFrame->data[2],
                 pFrame->linesize[0],
                 pFrame->linesize[1],
-                pFrame->linesize[2]
+                pFrame->linesize[2],
+                pFrame->pts
                 );
 
 
@@ -368,19 +377,19 @@ int main(int argc, char *argv[]){
                 av_init_packet(&tmp_pack);
                 tmp_pack.data = NULL; // for autoinit
                 tmp_pack.size = 0;
-//                do {
-//                    out_size = avcodec_encode_video2(pEncodeCodecCtx, &tmp_pack, frame, &got_pack);
-//                } while (got_pack != 1);
+                do {
+                    out_size = avcodec_encode_video2(pEncodeCodecCtx, &tmp_pack, frame, &got_pack);
+                } while (got_pack != 1);
 
 //                pkt_queue.push_back(tmp_pack);
-//                if (tmp_pack.stream_index==videoStream) {
-//                    printf("encoding frame %3d (size=%5d)  ---  pack size [%x]\n", i, out_size, tmp_pack.size);
-//                    fwrite(tmp_pack.data, 1, tmp_pack.size, pFile);
-//                }
+                if (tmp_pack.stream_index==videoStream) {
+                    printf("encoding frame %3d (size=%5d)  ---  pack size [%x]\n", i, out_size, tmp_pack.size);
+                    fwrite(tmp_pack.data, 1, tmp_pack.size, pFile);
+                }
 
-                out_size = avcodec_encode_video(pEncodeCodecCtx, outbuf, outbuf_size, frame);
-                printf("encoding frame %3d (size=%5d)\n", i, out_size);
-                fwrite(outbuf, 1, out_size, pFile);
+//                out_size = avcodec_encode_video(pEncodeCodecCtx, outbuf, outbuf_size, frame);
+//                printf("encoding frame %3d (size=%5d)\n", i, out_size);
+//                fwrite(outbuf, 1, out_size, pFile);
 
                 SDL_Texture *texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_YV12,
                         SDL_TEXTUREACCESS_STREAMING, pCodecCtx->width, pCodecCtx->height);
@@ -426,21 +435,21 @@ int main(int argc, char *argv[]){
     for(; out_size; i++) {
 //        fflush(stdout);
 
-//        int got_pack = 0;
-//        int out_size = avcodec_encode_video(pEncodeCodecCtx, outbuf, outbuf_size, pFrame);
-//        AVPacket tmp_pack;
-//        av_init_packet(&tmp_pack);
-//        tmp_pack.data = NULL; // for autoinit
-//        tmp_pack.size = 0;
-//        do {
-//            out_size = avcodec_encode_video2(pEncodeCodecCtx, &tmp_pack, NULL, &got_pack);
-//        } while (got_pack != 1);
+        int got_pack = 0;
+        int out_size = avcodec_encode_video(pEncodeCodecCtx, outbuf, outbuf_size, pFrame);
+        AVPacket tmp_pack;
+        av_init_packet(&tmp_pack);
+        tmp_pack.data = NULL; // for autoinit
+        tmp_pack.size = 0;
+        do {
+            out_size = avcodec_encode_video2(pEncodeCodecCtx, &tmp_pack, NULL, &got_pack);
+        } while (got_pack != 1);
 
-//        printf("encoding frame %3d (size=%5d)  ---  pack size [%x]\n", i, out_size, tmp_pack.size);
-//        fwrite(tmp_pack.data, 1, tmp_pack.size, pFile);
-        out_size = avcodec_encode_video(pEncodeCodecCtx, outbuf, outbuf_size, NULL);
-        printf("encoding frame %3d (size=%5d)\n", i, out_size);
-        fwrite(outbuf, 1, out_size, pFile);
+        printf("encoding frame %3d (size=%5d)  ---  pack size [%x]\n", i, out_size, tmp_pack.size);
+        fwrite(tmp_pack.data, 1, tmp_pack.size, pFile);
+//        out_size = avcodec_encode_video(pEncodeCodecCtx, outbuf, outbuf_size, NULL);
+//        printf("encoding frame %3d (size=%5d)\n", i, out_size);
+//        fwrite(outbuf, 1, out_size, pFile);
     }
 
     outbuf[0] = 0x00;
