@@ -18,9 +18,11 @@ project ( ff_test CXX )
 
 set(AVCONV_INC "/usr/include/x86_64-linux-gnu")
 set(AVCONV_PATH "/usr/lib/x86_64-linux-gnu")
+set(LIBAVDEVICE_PATH "/home/mikhail/workspace/utils/ffmpeg-2.8.14/libavdevice")
 
 include_directories ( ${PROJECT_NAME}
-        ${AVCONV_INC})
+        ${AVCONV_INC}
+        ${LIBAVDEVICE_PATH})
 
 link_directories("${AVCONV_PATH}")
 
@@ -35,6 +37,7 @@ set(LIBS
   avformat
   avcodec
   swscale
+  /usr/lib/x86_64-linux-gnu/libavdevice-ffmpeg.so.56 # TODO
   swresample
   avutil
   SDL2
