@@ -1,317 +1,465 @@
+/*
+ * Copyright (c) 2001 Fabrice Bellard
+ *
+ * This file is part of FFmpeg.
+ *
+ * FFmpeg is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
+ *
+ * FFmpeg is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with FFmpeg; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+ */
 
-
-
-// tutorial05.c
-// A pedagogical video player that really works!
-//
-// Code based on FFplay, Copyright (c) 2003 Fabrice Bellard,
-// and a tutorial by Martin Bohme (boehme@inb.uni-luebeckREMOVETHIS.de)
-// Tested on Gentoo, CVS version 5/01/07 compiled with GCC 4.1.1
-// With updates from https://github.com/chelyaev/ffmpeg-tutorial
-// Updates tested on:
-// LAVC 54.59.100, LAVF 54.29.104, LSWS 2.1.101, SDL 1.2.15
-// on GCC 4.7.2 in Debian February 2015
-// Use
-//
-//gcc -g -o tutorial05 ffmpeg_tutorial05.c -lavformat -lavcodec -lswscale -lavutil -lswresample -lz -ldl `sdl2-config --cflags --libs`
-// to build (assuming libavformat and libavcodec are correctly installed,
-// and assuming you have sdl-config. Please refer to SDL docs for your installation.)
-//
-// Run using
-// tutorial04 myvideofile.mpg
-//
-// to play the video stream on your screen.
-
-extern "C" { // based on: https://stackoverflow.com/questions/24487203/ffmpeg-undefined-reference-to-avcodec-register-all-does-not-link
-#include <libavcodec/avcodec.h>
-#include <libavformat/avformat.h>
-#include <libswscale/swscale.h>
-#include <avdevice.h> // header included from downloaded source fmpeg-2.18
-#include <libavutil/imgutils.h>
-}
-
-#include <SDL2/SDL.h>
-#include <SDL2/SDL_thread.h>
-
+#include <stdlib.h>
 #include <stdio.h>
-#include <assert.h>
-#include <math.h>
-#include <string>
+#include <string.h>
 
+#ifdef HAVE_AV_CONFIG_H
+#undef HAVE_AV_CONFIG_H
+#endif
+extern "C" {
+#include "libavcodec/avcodec.h"
+#include "libavutil/mathematics.h"
+}
+#define INBUF_SIZE 4096
+#define AUDIO_INBUF_SIZE 20480
+#define AUDIO_REFILL_THRESH 4096
+#define MAX_AUDIO_FRAME_SIZE 192000 // 1 second of 48khz 32bit audio
 
-int main(int argc, char *argv[]){
-    if(argc < 2) {
-        printf("Please provide a movie file\n");
-        return -1;
-    }
+/*
+ * Audio encoding example
+ */
+static void audio_encode_example(const char *filename)
+{
+    AVCodec *codec;
+    AVCodecContext *c= NULL;
+    int frame_size, i, j, out_size, outbuf_size;
+    FILE *f;
+    short *samples;
+    float t, tincr;
+    uint8_t *outbuf;
+    AVDictionary *dict = NULL;
 
-    std::string      filename(argv[1]);
-    std::string      out_file("out.video");
-    std::string      format("video4linux2");
-    AVFormatContext *pFormatCtx = NULL;
-    AVInputFormat   *file_iformat = NULL;
-    AVCodecContext*  pCodecCtx = NULL;
-    AVCodec*         pCodec = NULL;
-    AVDictionary    *optionsDict = NULL;
-    AVFrame         *pFrame = NULL;
-    AVFrame         *pFrameRGB = NULL;
+    printf("Audio encoding\n");
 
-    struct SwsContext      *sws_ctx = NULL;
-    int             numBytes;
-    uint8_t         *buffer = NULL;
-
-    AVPacket        packet;
-    int             frameFinished;
-
-    AVCodecContext*  pEncodeCodecCtx = NULL;
-    AVCodec*         pEncodeCodec = NULL;
-
-    int outbuf_size = 100000;
-    uint8_t* outbuf = NULL;// malloc(outbuf_size);
-
-    // Register all formats and codecs
-    av_register_all();
-    avdevice_register_all();
-
-    // determine format context
-    pFormatCtx = avformat_alloc_context();
-    if (!pFormatCtx) {
-        printf("Memory error\n");
-        return -1;
-    }
-
-    AVInputFormat * iformat = av_iformat_next(NULL);
-    while(iformat != NULL)
-    {
-        printf("%s:%s\n", iformat->long_name, iformat->name);
-        iformat = av_iformat_next(iformat);
-    }
-
-    file_iformat = av_find_input_format(format.c_str());
-    if (file_iformat == NULL) {
-        printf("Unknown input format: '%s'\n", format.c_str());
-        return -1; // Couldn't open file
-    }
-
-    // Open video file
-    if(avformat_open_input(&pFormatCtx, filename.c_str(), file_iformat, NULL)!=0){
-      printf("Can't Open video file\n");
-      return -1; // Couldn't open file
-    } 
-
-    // Retrieve stream information
-    if(avformat_find_stream_info(pFormatCtx, NULL)<0) {
-      printf("Can't Retrieve stream information\n");
-      return -1; // Couldn't find stream information
-    }
-
-    // Dump information about file onto standard error
-    av_dump_format(pFormatCtx, 0, argv[1], 0);
-
-    // Find the first video stream
-    int videoStream=-1;
-    for(int i=0; i<pFormatCtx->nb_streams; i++)
-    if(pFormatCtx->streams[i]->codec->codec_type==AVMEDIA_TYPE_VIDEO) {
-      videoStream=i;
-      break;
-    }
-    if(videoStream==-1) {
-        printf("Can't find streams\n");
-        return -1; // Didn't find a video stream
-    }
-    printf("find %d streams\n", videoStream + 1);
-
-    // Get a pointer to the codec context for the video stream
-    pCodecCtx=pFormatCtx->streams[videoStream]->codec;
-
-    // Find the decoder for the video stream
-    pCodec=avcodec_find_decoder(pCodecCtx->codec_id);
-    if(pCodec==NULL) {
-      printf("Unsupported codec!\n");
-      return -1; // Codec not found
-    }
-    printf("Find codec [%s]\n", pCodec->long_name);
-
-    // Open codec
-    if(avcodec_open2(pCodecCtx, pCodec, &optionsDict)<0) {
-        printf("Can't open codec\n");
-        return -1; // Could not open codec
-    }
-
-    // Allocate video frame
-    pFrame=av_frame_alloc();
-
-    // Allocate an AVFrame structure
-    pFrameRGB=av_frame_alloc();
-    if(pFrameRGB==NULL){
-        return -1;
-    }
-
-    // Determine required buffer size and allocate buffer
-    numBytes=avpicture_get_size(PIX_FMT_RGB32, pCodecCtx->width,
-                    pCodecCtx->height);
-    buffer=(uint8_t *)av_malloc(numBytes*sizeof(uint8_t));
-
-    sws_ctx = sws_getContext
-        (
-            pCodecCtx->width,
-            pCodecCtx->height,
-            pCodecCtx->pix_fmt,
-            pCodecCtx->width,
-            pCodecCtx->height,
-            PIX_FMT_RGB32,
-            SWS_BILINEAR,
-            NULL,
-            NULL,
-            NULL
-        );
-
-    // Assign appropriate parts of buffer to image planes in pFrameRGB
-    // Note that pFrameRGB is an AVFrame, but AVFrame is a superset
-    // of AVPicture
-    avpicture_fill((AVPicture *)pFrameRGB, buffer, PIX_FMT_RGB32,
-           pCodecCtx->width, pCodecCtx->height);
-
-
-    // Try to encode and write file
-    FILE *pFile;
-    // Open file
-    pFile=fopen(out_file.c_str(), "ab");
-    printf("file oened\n");
-    outbuf = new uint8_t[numBytes*sizeof(uint8_t)];
-
-    pEncodeCodec = avcodec_find_encoder(AV_CODEC_ID_H264);
-    if (!pEncodeCodec) {
+    /* find the MP2 encoder */
+    codec = avcodec_find_encoder(AV_CODEC_ID_MP2);
+    if (!codec) {
         fprintf(stderr, "codec not found\n");
         exit(1);
     }
-    pEncodeCodecCtx = avcodec_alloc_context3(pEncodeCodec);
-    pEncodeCodecCtx->codec_id = AV_CODEC_ID_H264;
-    pEncodeCodecCtx->codec_type = AVMEDIA_TYPE_VIDEO;
-    pEncodeCodecCtx->gop_size = pCodecCtx->gop_size;
-    pEncodeCodecCtx->bit_rate = pCodecCtx->bit_rate;
-    pEncodeCodecCtx->width = pCodecCtx->width;
-    pEncodeCodecCtx->height = pCodecCtx->height;
-    pEncodeCodecCtx->time_base = pCodecCtx->time_base;
-    pEncodeCodecCtx->max_b_frames = 0;
-    pEncodeCodecCtx->pix_fmt = AV_PIX_FMT_YUV420P;
-//    pEncodeCodecCtx->
 
-    printf("Settings: \n\
-        width:[%d]\n\
-        height:[%d]\n\
-    \n",
-    pEncodeCodecCtx->width,
-    pEncodeCodecCtx->height);
+    c= avcodec_alloc_context3(codec);
 
-    if(avcodec_open2(pEncodeCodecCtx, pEncodeCodec, NULL)<0) {
-        printf("Can't open codec to encode\n");
-        return -1; // Could not open codec
+    /* put sample parameters */
+    c->bit_rate = 64000;
+    c->sample_rate = 44100;
+    c->channels = 2;
+
+    /* open it */
+    int res = avcodec_open2(c, codec, &dict);
+    printf("avcodec_open2 result [%d]\n", res);
+    char erbuf[1024];
+    if (res < 0) {
+        av_strerror(res, erbuf, 1024);
+        fprintf(stderr, "could not open codec [%d] error:[%s]\n", __LINE__, erbuf);
+        exit(1);
     }
 
-    AVFrame* frame = avcodec_alloc_frame();
-    if (!frame) {
-        fprintf(stderr, "Could not allocate video frame\n");
-        return -1;
-    }
-    frame->format = pEncodeCodecCtx->pix_fmt;
-    frame->width  = pEncodeCodecCtx->width;
-    frame->height = pEncodeCodecCtx->height;
+    /* the codec gives us the frame size, in samples */
+    frame_size = c->frame_size;
+    samples = (short *)malloc(frame_size * 2 * c->channels);
+    outbuf_size = 10000;
+    outbuf = (uint8_t *)malloc(outbuf_size);
 
-    /* the image can be allocated by any means and av_image_alloc() is
-          * just the most convenient way if av_malloc() is to be used */
-
-    int ret = av_image_alloc(frame->data, frame->linesize, pEncodeCodecCtx->width, pEncodeCodecCtx->height, pEncodeCodecCtx->pix_fmt, 32);
-    if (ret < 0) {
-     printf("Could not allocate raw picture buffer\n");
-     return -1;
+    f = fopen(filename, "wb");
+    if (!f) {
+        fprintf(stderr, "could not open %s\n", filename);
+        exit(1);
     }
 
-    int out_size = 0;
-    printf("Ready to code/decode video\n");
-    for (int i=0; i< 25; ++i){
-        av_read_frame(pFormatCtx, &packet);
-        printf("av_read_frame complete\n");
-        //    while(av_read_frame(pFormatCtx, &packet)>=0) {
-        // Is this a packet from the video stream?
-        if(packet.stream_index==videoStream) {
-            // Decode video frame
-            printf("try to decode\n");
-            avcodec_decode_video2(pCodecCtx, pFrame, &frameFinished, &packet);
-            printf("decoded\n");
-            // Did we get a video frame?
-            if(frameFinished) {
-                // Convert the image from its native format to RGB
-//                sws_scale
-//                (
-//                    sws_ctx,
-//                    (uint8_t const * const *)pFrame->data,
-//                    pFrame->linesize,
-//                    0,
-//                    pCodecCtx->height,
-//                    pFrameRGB->data,
-//                    pFrameRGB->linesize
-//                );
+    /* encode a single tone sound */
+    t = 0;
+    tincr = 2 * M_PI * 440.0 / c->sample_rate;
+    for(i=0;i<200;i++) {
+        for(j=0;j<frame_size;j++) {
+            samples[2*j] = (int)(sin(t) * 10000);
+            samples[2*j+1] = samples[2*j];
+            t += tincr;
+        }
+        /* encode the samples */
+        out_size = avcodec_encode_audio(c, outbuf, outbuf_size, samples);
+        fwrite(outbuf, 1, out_size, f);
+    }
+    fclose(f);
+    free(outbuf);
+    free(samples);
 
-                /* prepare a dummy image */
-                         /* Y */
-                for(int y=0;y<pEncodeCodecCtx->height;y++) {
-                 for(int x=0;x<pEncodeCodecCtx->width;x++) {
-                     frame->data[0][y * frame->linesize[0] + x] = x + y + i * 3;
-                 }
-                }
+    avcodec_close(c);
+    av_free(c);
+}
 
-                /* Cb and Cr */
-                for(int y=0;y<pEncodeCodecCtx->height/2;y++) {
-                 for(int x=0;x<pEncodeCodecCtx->width/2;x++) {
-                     frame->data[1][y * frame->linesize[1] + x] = 128 + y + i * 2;
-                     frame->data[2][y * frame->linesize[2] + x] = 64 + x + i * 5;
-                 }
-                }
+/*
+ * Audio decoding.
+ */
+static void audio_decode_example(const char *outfilename, const char *filename)
+{
+    AVCodec *codec;
+    AVCodecContext *c= NULL;
+    int out_size, len;
+    FILE *f, *outfile;
+    uint8_t *outbuf;
+    uint8_t inbuf[AUDIO_INBUF_SIZE + FF_INPUT_BUFFER_PADDING_SIZE];
+    AVPacket avpkt;
+    AVDictionary *dict = NULL;
 
-//                frame->pts = pFrame->pts;
-//                av_frame_copy(frame, pFrame);
+    av_init_packet(&avpkt);
 
+    printf("Audio decoding\n");
 
+    /* find the mpeg audio decoder */
+    codec = avcodec_find_decoder(AV_CODEC_ID_MP2);
+    if (!codec) {
+        fprintf(stderr, "codec not found\n");
+        exit(1);
+    }
 
-                int got_pack = 0;
-//                int out_size = avcodec_encode_video(pEncodeCodecCtx, outbuf, outbuf_size, pFrame);
-                AVPacket tmp_pack;
-                av_init_packet(&tmp_pack);
-                tmp_pack.data = NULL; // for autoinit
-                tmp_pack.size = 0;
-                out_size = avcodec_encode_video2(pEncodeCodecCtx, &tmp_pack, frame, &got_pack);
+    c= avcodec_alloc_context3(codec);
 
-                printf("encoding frame %3d (size=%5d)  ---  pack size [%x]\n", i, out_size, tmp_pack.size);
-                fwrite(tmp_pack.data, 1, tmp_pack.size, pFile);
+    /* open it */
+    if (avcodec_open2(c, codec, &dict) < 0) {
+        fprintf(stderr, "could not open codec\n");
+        exit(1);
+    }
+
+    outbuf = (uint8_t *) malloc(MAX_AUDIO_FRAME_SIZE);
+
+    f = fopen(filename, "rb");
+    if (!f) {
+        fprintf(stderr, "could not open %s\n", filename);
+        exit(1);
+    }
+    outfile = fopen(outfilename, "wb");
+    if (!outfile) {
+        av_free(c);
+        exit(1);
+    }
+
+    /* decode until eof */
+    avpkt.data = inbuf;
+    avpkt.size = fread(inbuf, 1, AUDIO_INBUF_SIZE, f);
+
+    while (avpkt.size > 0) {
+        out_size = MAX_AUDIO_FRAME_SIZE;
+        len = avcodec_decode_audio3(c, (short *)outbuf, &out_size, &avpkt);
+        if (len < 0) {
+            fprintf(stderr, "Error while decoding\n");
+            exit(1);
+        }
+        if (out_size > 0) {
+            /* if a frame has been decoded, output it */
+            fwrite(outbuf, 1, out_size, outfile);
+        }
+        avpkt.size -= len;
+        avpkt.data += len;
+        if (avpkt.size < AUDIO_REFILL_THRESH) {
+            /* Refill the input buffer, to avoid trying to decode
+             * incomplete frames. Instead of this, one could also use
+             * a parser, or use a proper container format through
+             * libavformat. */
+            memmove(inbuf, avpkt.data, avpkt.size);
+            avpkt.data = inbuf;
+            len = fread(avpkt.data + avpkt.size, 1,
+                        AUDIO_INBUF_SIZE - avpkt.size, f);
+            if (len > 0)
+                avpkt.size += len;
+        }
+    }
+
+    fclose(outfile);
+    fclose(f);
+    free(outbuf);
+
+    avcodec_close(c);
+    av_free(c);
+}
+
+/*
+ * Video encoding example
+ */
+static void video_encode_example(const char *filename)
+{
+    AVCodec *codec;
+    AVCodecContext *c= NULL;
+    int i, out_size, size, x, y, outbuf_size;
+    FILE *f;
+    AVFrame *picture;
+    uint8_t *outbuf, *picture_buf;
+
+    printf("Video encoding\n");
+
+    /* find the mpeg1 video encoder */
+    codec = avcodec_find_encoder(AV_CODEC_ID_MPEG1VIDEO);
+    if (!codec) {
+        fprintf(stderr, "codec not found\n");
+        exit(1);
+    }
+
+    c= avcodec_alloc_context3(codec);
+    picture= avcodec_alloc_frame();
+
+    /* put sample parameters */
+    c->bit_rate = 400000;
+    /* resolution must be a multiple of two */
+    c->width = 352;
+    c->height = 288;
+    /* frames per second */
+    c->time_base= (AVRational){1,25};
+    c->gop_size = 10; /* emit one intra frame every ten frames */
+    c->max_b_frames=1;
+    c->pix_fmt = AV_PIX_FMT_YUV420P;
+
+    /* open it */
+    if (avcodec_open2(c, codec, NULL) < 0) {
+        fprintf(stderr, "could not open codec\n");
+        exit(1);
+    }
+
+    f = fopen(filename, "wb");
+    if (!f) {
+        fprintf(stderr, "could not open %s\n", filename);
+        exit(1);
+    }
+
+    /* alloc image and output buffer */
+    outbuf_size = 100000;
+    outbuf = (uint8_t *)malloc(outbuf_size);
+    size = c->width * c->height;
+    picture_buf = (uint8_t *)malloc((size * 3) / 2); /* size for YUV 420 */
+
+    picture->data[0] = picture_buf;
+    picture->data[1] = picture->data[0] + size;
+    picture->data[2] = picture->data[1] + size / 4;
+    picture->linesize[0] = c->width;
+    picture->linesize[1] = c->width / 2;
+    picture->linesize[2] = c->width / 2;
+
+    /* encode 1 second of video */
+    for(i=0;i<25;i++) {
+        fflush(stdout);
+        /* prepare a dummy image */
+        /* Y */
+        for(y=0;y<c->height;y++) {
+            for(x=0;x<c->width;x++) {
+                picture->data[0][y * picture->linesize[0] + x] = x + y + i * 3;
             }
         }
 
-        // Free the packet that was allocated by av_read_frame
-        av_free_packet(&packet);
+        /* Cb and Cr */
+        for(y=0;y<c->height/2;y++) {
+            for(x=0;x<c->width/2;x++) {
+                picture->data[1][y * picture->linesize[1] + x] = 128 + y + i * 2;
+                picture->data[2][y * picture->linesize[2] + x] = 64 + x + i * 5;
+            }
+        }
+
+        /* encode the image */
+        out_size = avcodec_encode_video(c, outbuf, outbuf_size, picture);
+        printf("encoding frame %3d (size=%5d)\n", i, out_size);
+        fwrite(outbuf, 1, out_size, f);
     }
 
-    for(int i = -1; out_size; i++) {
+    /* get the delayed frames */
+    for(; out_size; i++) {
         fflush(stdout);
 
-        int got_pack = 0;
-//                int out_size = avcodec_encode_video(pEncodeCodecCtx, outbuf, outbuf_size, pFrame);
-        AVPacket tmp_pack;
-        av_init_packet(&tmp_pack);
-        tmp_pack.data = NULL; // for autoinit
-        tmp_pack.size = 0;
-        out_size = avcodec_encode_video2(pEncodeCodecCtx, &tmp_pack, NULL, &got_pack);
-
-        printf("encoding frame %3d (size=%5d)  ---  pack size [%x]\n", i, out_size, tmp_pack.size);
-        fwrite(tmp_pack.data, 1, tmp_pack.size, pFile);
+        out_size = avcodec_encode_video(c, outbuf, outbuf_size, NULL);
+        printf("write frame %3d (size=%5d)\n", i, out_size);
+        fwrite(outbuf, 1, out_size, f);
     }
 
+    /* add sequence end code to have a real mpeg file */
     outbuf[0] = 0x00;
     outbuf[1] = 0x00;
     outbuf[2] = 0x01;
     outbuf[3] = 0xb7;
-    fwrite(outbuf, 1, 4, pFile);
-    fclose(pFile);
+    fwrite(outbuf, 1, 4, f);
+    fclose(f);
+    free(picture_buf);
+    free(outbuf);
+
+    avcodec_close(c);
+    av_free(c);
+    av_free(picture);
+    printf("\n");
 }
 
+/*
+ * Video decoding example
+ */
 
+static void pgm_save(unsigned char *buf, int wrap, int xsize, int ysize,
+                     char *filename)
+{
+    FILE *f;
+    int i;
+
+    f=fopen(filename,"w");
+    fprintf(f,"P5\n%d %d\n%d\n",xsize,ysize,255);
+    for(i=0;i<ysize;i++)
+        fwrite(buf + i * wrap,1,xsize,f);
+    fclose(f);
+}
+
+static void video_decode_example(const char *outfilename, const char *filename)
+{
+    AVCodec *codec;
+    AVCodecContext *c= NULL;
+    int frame, got_picture, len;
+    FILE *f;
+    AVFrame *picture;
+    uint8_t inbuf[INBUF_SIZE + FF_INPUT_BUFFER_PADDING_SIZE];
+    char buf[1024];
+    AVPacket avpkt;
+
+    av_init_packet(&avpkt);
+
+    /* set end of buffer to 0 (this ensures that no overreading happens for damaged mpeg streams) */
+    memset(inbuf + INBUF_SIZE, 0, FF_INPUT_BUFFER_PADDING_SIZE);
+
+    printf("Video decoding\n");
+
+    /* find the mpeg1 video decoder */
+    codec = avcodec_find_decoder(CODEC_ID_MPEG1VIDEO);
+    if (!codec) {
+        fprintf(stderr, "codec not found\n");
+        exit(1);
+    }
+
+    c= avcodec_alloc_context3(codec);
+    picture= avcodec_alloc_frame();
+
+    if(codec->capabilities&CODEC_CAP_TRUNCATED)
+        c->flags|= CODEC_FLAG_TRUNCATED; /* we do not send complete frames */
+
+    /* For some codecs, such as msmpeg4 and mpeg4, width and height
+       MUST be initialized there because this information is not
+       available in the bitstream. */
+
+    /* open it */
+    if (avcodec_open2(c, codec, NULL) < 0) {
+        fprintf(stderr, "could not open codec\n");
+        exit(1);
+    }
+
+    /* the codec gives us the frame size, in samples */
+
+    f = fopen(filename, "rb");
+    if (!f) {
+        fprintf(stderr, "could not open %s\n", filename);
+        exit(1);
+    }
+
+    frame = 0;
+    for(;;) {
+        avpkt.size = fread(inbuf, 1, INBUF_SIZE, f);
+        if (avpkt.size == 0)
+            break;
+
+        /* NOTE1: some codecs are stream based (mpegvideo, mpegaudio)
+           and this is the only method to use them because you cannot
+           know the compressed data size before analysing it.
+
+           BUT some other codecs (msmpeg4, mpeg4) are inherently frame
+           based, so you must call them with all the data for one
+           frame exactly. You must also initialize 'width' and
+           'height' before initializing them. */
+
+        /* NOTE2: some codecs allow the raw parameters (frame size,
+           sample rate) to be changed at any frame. We handle this, so
+           you should also take care of it */
+
+        /* here, we use a stream based decoder (mpeg1video), so we
+           feed decoder and see if it could decode a frame */
+        avpkt.data = inbuf;
+        while (avpkt.size > 0) {
+            len = avcodec_decode_video2(c, picture, &got_picture, &avpkt);
+            if (len < 0) {
+                fprintf(stderr, "Error while decoding frame %d\n", frame);
+                exit(1);
+            }
+            if (got_picture) {
+                printf("saving frame %3d\n", frame);
+                fflush(stdout);
+
+                /* the picture is allocated by the decoder. no need to
+                   free it */
+                snprintf(buf, sizeof(buf), outfilename, frame);
+                pgm_save(picture->data[0], picture->linesize[0],
+                         c->width, c->height, buf);
+                frame++;
+            }
+            avpkt.size -= len;
+            avpkt.data += len;
+        }
+    }
+
+    /* some codecs, such as MPEG, transmit the I and P frame with a
+       latency of one frame. You must do the following to have a
+       chance to get the last frame of the video */
+    avpkt.data = NULL;
+    avpkt.size = 0;
+    len = avcodec_decode_video2(c, picture, &got_picture, &avpkt);
+    if (got_picture) {
+        printf("saving last frame %3d\n", frame);
+        fflush(stdout);
+
+        /* the picture is allocated by the decoder. no need to
+           free it */
+        snprintf(buf, sizeof(buf), outfilename, frame);
+        pgm_save(picture->data[0], picture->linesize[0],
+                 c->width, c->height, buf);
+        frame++;
+    }
+
+    fclose(f);
+
+    avcodec_close(c);
+    av_free(c);
+    av_free(picture);
+    printf("\n");
+}
+
+int main(int argc, char **argv)
+{
+    const char *filename;
+
+    /* must be called before using avcodec lib */
+//    avcodec_init();
+
+    /* register all the codecs */
+    avcodec_register_all();
+
+    if (argc <= 1) {
+//        audio_encode_example("/tmp/test.mp2");
+//        audio_decode_example("/tmp/test.sw", "/tmp/test.mp2");
+
+        video_encode_example("test.mpg");
+        filename = "test.mpg";
+    } else {
+        filename = argv[1];
+    }
+
+    //    audio_decode_example("/tmp/test.sw", filename);
+//    video_decode_example("test%d.pgm", filename);
+
+    return 0;
+}
