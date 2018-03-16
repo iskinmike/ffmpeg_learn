@@ -26,6 +26,7 @@
 useful to understand:
     https://ffmpeg.zeranoe.com/forum/viewtopic.php?t=604
     https://stackoverflow.com/questions/17816532/creating-a-video-from-images-using-ffmpeg-libav-and-libx264
+    https://stackoverflow.com/questions/16564870/ffmpeg-format-not-available
 */
 
 extern "C" { // based on: https://stackoverflow.com/questions/24487203/ffmpeg-undefined-reference-to-avcodec-register-all-does-not-link
@@ -45,6 +46,7 @@ extern "C" { // based on: https://stackoverflow.com/questions/24487203/ffmpeg-un
 #include <string>
 #include <vector>
 #include <algorithm>
+#include <iostream>
 
 #define FF_REFRESH_EVENT (SDL_USEREVENT)
 #define FF_QUIT_EVENT (SDL_USEREVENT + 1)
@@ -84,7 +86,7 @@ int main(int argc, char *argv[]){
     }
 
     std::string      filename(argv[1]);
-    std::string      out_file("out.video");
+    std::string      out_file("out.mpg");
     std::string      format("video4linux2");
     AVFormatContext *pFormatCtx = NULL;
     AVInputFormat   *file_iformat = NULL;
@@ -153,6 +155,9 @@ int main(int argc, char *argv[]){
     // Dump information about file onto standard error
     av_dump_format(pFormatCtx, 0, argv[1], 0);
 
+    std::cout << "format bit_rate  = " << pFormatCtx->bit_rate  << std::endl;
+
+
     // Find the first video stream
     int videoStream=-1;
     for(int i=0; i<pFormatCtx->nb_streams; i++)
@@ -183,7 +188,7 @@ int main(int argc, char *argv[]){
         return -1; // Could not open codec
     }
 
-    printf("Need options %d", av_dict_count(optionsDict));
+    printf("Need options %d\n", av_dict_count(optionsDict));
 
     // Allocate video frame
     pFrame=av_frame_alloc();
@@ -209,7 +214,7 @@ int main(int argc, char *argv[]){
     }
 
     // Determine required buffer size and allocate buffer
-    numBytes=avpicture_get_size(PIX_FMT_RGB32, pCodecCtx->width,
+    numBytes=avpicture_get_size(AV_PIX_FMT_YUV420P, pCodecCtx->width,
                     pCodecCtx->height);
     buffer=(uint8_t *)av_malloc(numBytes*sizeof(uint8_t));
 
@@ -220,7 +225,7 @@ int main(int argc, char *argv[]){
             pCodecCtx->pix_fmt,
             pCodecCtx->width,
             pCodecCtx->height,
-            PIX_FMT_RGB32,
+            AV_PIX_FMT_YUV420P,
             SWS_BILINEAR,
             NULL,
             NULL,
@@ -230,7 +235,7 @@ int main(int argc, char *argv[]){
     // Assign appropriate parts of buffer to image planes in pFrameRGB
     // Note that pFrameRGB is an AVFrame, but AVFrame is a superset
     // of AVPicture
-    avpicture_fill((AVPicture *)pFrameRGB, buffer, PIX_FMT_RGB32,
+    avpicture_fill((AVPicture *)pFrameRGB, buffer, AV_PIX_FMT_YUV420P,
            pCodecCtx->width, pCodecCtx->height);
 
 
@@ -238,33 +243,38 @@ int main(int argc, char *argv[]){
     FILE *pFile;
     // Open file
     pFile=fopen(out_file.c_str(), "wb");
-    printf("file oened\n");
+    printf("file opened\n");
     outbuf = new uint8_t[numBytes*sizeof(uint8_t)];
 
-    pEncodeCodec = avcodec_find_encoder(AV_CODEC_ID_H264);
-//    pEncodeCodec = avcodec_find_encoder(AV_CODEC_ID_MPEG4);
+//    pEncodeCodec = avcodec_find_encoder(AV_CODEC_ID_H264);
+    pEncodeCodec = avcodec_find_encoder(AV_CODEC_ID_MPEG4);
     if (!pEncodeCodec) {
         fprintf(stderr, "codec not found\n");
         exit(1);
     }
     pEncodeCodecCtx = avcodec_alloc_context3(pEncodeCodec);
 //    pEncodeCodecCtx->codec_id = AV_CODEC_ID_H264;
-//    pEncodeCodecCtx->codec_type = AVMEDIA_TYPE_VIDEO;
-    pEncodeCodecCtx->gop_size = 30;//pCodecCtx->gop_size;
-    pEncodeCodecCtx->bit_rate = pCodecCtx->bit_rate;
+    pEncodeCodecCtx->codec_type = AVMEDIA_TYPE_VIDEO;
+    pEncodeCodecCtx->gop_size = 0;//pCodecCtx->gop_size;
+    pEncodeCodecCtx->bit_rate = pFormatCtx->bit_rate;
     pEncodeCodecCtx->width = pCodecCtx->width;
     pEncodeCodecCtx->height = pCodecCtx->height;
-    pEncodeCodecCtx->time_base = pCodecCtx->time_base;
-    pEncodeCodecCtx->max_b_frames = 1;
+    pEncodeCodecCtx->time_base = (AVRational){1,25};//pCodecCtx->time_base;//
+    pEncodeCodecCtx->max_b_frames = 0;
     pEncodeCodecCtx->pix_fmt = AV_PIX_FMT_YUV420P;
-//    pEncodeCodecCtx->
+    pEncodeCodecCtx->bit_rate_tolerance = pFormatCtx->bit_rate;
 
-    printf("Settings: \n\
-        width:[%d]\n\
-        height:[%d]\n\
-    \n",
-    pEncodeCodecCtx->width,
-    pEncodeCodecCtx->height);
+    std::cout << "codec_id     = " << pEncodeCodecCtx->codec_id     << std::endl;
+    std::cout << "codec_type   = " << pEncodeCodecCtx->codec_type   << std::endl;
+    std::cout << "gop_size     = " << pEncodeCodecCtx->gop_size     << std::endl;
+    std::cout << "bit_rate     = " << pEncodeCodecCtx->bit_rate     << std::endl;
+    std::cout << "width        = " << pEncodeCodecCtx->width        << std::endl;
+    std::cout << "height       = " << pEncodeCodecCtx->height       << std::endl;
+    std::cout << "max_b_frames = " << pEncodeCodecCtx->max_b_frames << std::endl;
+    std::cout << "refcounted_frames = " << pEncodeCodecCtx->refcounted_frames << std::endl;
+    std::cout << "pix_fmt           = " << pCodecCtx->pix_fmt << std::endl;
+    std::cout << "bit_rate_tolerance = " << pEncodeCodecCtx->bit_rate_tolerance << std::endl;
+
 
     if(avcodec_open2(pEncodeCodecCtx, pEncodeCodec, NULL)<0) {
         printf("Can't open codec to encode\n");
@@ -295,81 +305,30 @@ int main(int argc, char *argv[]){
 //    std::vector<AVPacket> pkt_queue;
 
     printf("Ready to code/decode video\n");
-    for (int i=0; i< 300; ++i){
-        av_read_frame(pFormatCtx, &packet);
-        printf("av_read_frame complete\n");
-        //    while(av_read_frame(pFormatCtx, &packet)>=0) {
+    while(av_read_frame(pFormatCtx, &packet)>=0) {
+//    for (int i=0; i< 100; ++i){
+//        av_read_frame(pFormatCtx, &packet);
+
         // Is this a packet from the video stream?
         if(packet.stream_index==videoStream) {
             // Decode video frame
-            printf("try to decode\n");
             avcodec_decode_video2(pCodecCtx, pFrame, &frameFinished, &packet);
-            printf("decoded\n");
             // Did we get a video frame?
             if(frameFinished) {
-                // Convert the image from its native format to RGB
-                sws_scale
-                (
-                    sws_ctx,
-                    (uint8_t const * const *)pFrame->data,
-                    pFrame->linesize,
-                    0,
-                    pCodecCtx->height,
-                    pFrameRGB->data,
-                    pFrameRGB->linesize
-                );
+//                if (i < 4) { // skip couple of frames
+//                    continue;
+//                }
+                // Convert the image from its native format to AV_PIX_FMT_YUV420P
+                sws_scale(sws_ctx,
+                    ((AVPicture*)pFrame)->data, ((AVPicture*)pFrame)->linesize, 0,
+                    pCodecCtx->height, ((AVPicture *)pFrameRGB)->data,
+                    ((AVPicture *)pFrameRGB)->linesize);
 
-                /* prepare a dummy image */
-                         /* Y */
-                for(int y=0;y<pEncodeCodecCtx->height;y++) {
-                 for(int x=0;x<pEncodeCodecCtx->width;x++) {
-                     frame->data[0][y * frame->linesize[0] + x] = x + y + i * 3;
-                 }
-                }
+                pFrameRGB->pts = pFrame->best_effort_timestamp;
 
-                /* Cb and Cr */
-                for(int y=0;y<pEncodeCodecCtx->height/2;y++) {
-                 for(int x=0;x<pEncodeCodecCtx->width/2;x++) {
-                     frame->data[1][y * frame->linesize[1] + x] = 128 + y + i * 2;
-                     frame->data[2][y * frame->linesize[2] + x] = 64 + x + i * 5;
-                 }
-                }
-
-//                pFrame->pts = getNextPts();
-//                frame->pts = pFrame->pts;
-                frame->pts = getNextPts();
-//                av_frame_copy(frame, pFrame);
-                printf("frame settings: \n\
-                    data:[%p]\n\
-                    data[0]:[%p]\n\
-                    data[1]:[%p]\n\
-                    data[2]:[%p]\n\
-                \n",
-                (uint8_t*)frame->data,
-                (uint8_t*)frame->data[0],
-                (uint8_t*)frame->data[1],
-                (uint8_t*)frame->data[2]);
-
-                printf("pFrame settings: \n\
-                    data:[%p]\n\
-                    data[0]:[%p]\n\
-                    data[1]:[%p]\n\
-                    data[2]:[%p]\n\
-                    linesize[0]:[%d]\n\
-                    linesize[1]:[%d]\n\
-                    linesize[2]:[%d]\n\
-                    pts:[%d]\n\
-                \n",
-                (uint8_t*) pFrame->data,
-                (uint8_t*) pFrame->data[0],
-                (uint8_t*) pFrame->data[1],
-                (uint8_t*) pFrame->data[2],
-                pFrame->linesize[0],
-                pFrame->linesize[1],
-                pFrame->linesize[2],
-                pFrame->pts
-                );
-
+                pFrameRGB->format = AV_PIX_FMT_YUV420P;
+                pFrameRGB->width = pCodecCtx->width;
+                pFrameRGB->height = pCodecCtx->height;
 
                 int got_pack = 0;
 //                int out_size = avcodec_encode_video(pEncodeCodecCtx, outbuf, outbuf_size, pFrame);
@@ -377,13 +336,13 @@ int main(int argc, char *argv[]){
                 av_init_packet(&tmp_pack);
                 tmp_pack.data = NULL; // for autoinit
                 tmp_pack.size = 0;
-                do {
-                    out_size = avcodec_encode_video2(pEncodeCodecCtx, &tmp_pack, frame, &got_pack);
-                } while (got_pack != 1);
+//                do {
+                    out_size = avcodec_encode_video2(pEncodeCodecCtx, &tmp_pack, pFrameRGB, &got_pack);
+//                } while (got_pack != 1);
 
 //                pkt_queue.push_back(tmp_pack);
-                if (tmp_pack.stream_index==videoStream) {
-                    printf("encoding frame %3d (size=%5d)  ---  pack size [%x]\n", i, out_size, tmp_pack.size);
+                printf("encoding frame %3d (size=%5d)  ---  pack size [%x] --- [%d]\n", i, out_size, tmp_pack.size, got_pack);
+                if (got_pack) {
                     fwrite(tmp_pack.data, 1, tmp_pack.size, pFile);
                 }
 
@@ -397,22 +356,17 @@ int main(int argc, char *argv[]){
                 SDL_UpdateYUVTexture(
                     texture,
                     NULL,
-                    pFrame->data[0], //vp->yPlane,
-                    pFrame->linesize[0],
-                    pFrame->data[1], //vp->yPlane,
-                    pFrame->linesize[1],
-//                        NULL, 0
-                    pFrame->data[2], //vp->yPlane,
-                    pFrame->linesize[2]
-//                    NULL,//pFrameRGB->buf[0]->data, //vp->uPlane,
-//                    0,//(pFrameRGB->buf[0]->data != NULL) ? (pCodecCtx->width / 2) : 0,    //vp->uvPitch,
-//                    NULL,//pFrameRGB->buf[0]->data, //vp->vPlane,
-//                    0//(pFrameRGB->buf[0]->data != NULL) ? (pCodecCtx->width / 2) : 0    //vp->uvPitch
+                    pFrameRGB->data[0], //vp->yPlane,
+                    pFrameRGB->linesize[0],
+                    pFrameRGB->data[1], //vp->yPlane,
+                    pFrameRGB->linesize[1],
+                    pFrameRGB->data[2], //vp->yPlane,
+                    pFrameRGB->linesize[2]
                 );
                 SDL_RenderClear(renderer);
                 SDL_RenderCopy(renderer, texture, NULL, NULL);
                 SDL_RenderPresent(renderer);
-                SaveFrame(pFrameRGB, pCodecCtx->width, pCodecCtx->height, i);
+//                SaveFrame(pFrameRGB, pCodecCtx->width, pCodecCtx->height, i);
             }
         }
 
@@ -432,21 +386,24 @@ int main(int argc, char *argv[]){
 //    }
 
     int i = 0;
+    out_size=1;
     for(; out_size; i++) {
 //        fflush(stdout);
 
         int got_pack = 0;
-        int out_size = avcodec_encode_video(pEncodeCodecCtx, outbuf, outbuf_size, pFrame);
         AVPacket tmp_pack;
         av_init_packet(&tmp_pack);
         tmp_pack.data = NULL; // for autoinit
         tmp_pack.size = 0;
-        do {
+//        do {
             out_size = avcodec_encode_video2(pEncodeCodecCtx, &tmp_pack, NULL, &got_pack);
-        } while (got_pack != 1);
+//        } while (got_pack != 1);
 
         printf("encoding frame %3d (size=%5d)  ---  pack size [%x]\n", i, out_size, tmp_pack.size);
         fwrite(tmp_pack.data, 1, tmp_pack.size, pFile);
+//        if (out_size != 0) {
+//            break;
+//        }
 //        out_size = avcodec_encode_video(pEncodeCodecCtx, outbuf, outbuf_size, NULL);
 //        printf("encoding frame %3d (size=%5d)\n", i, out_size);
 //        fwrite(outbuf, 1, out_size, pFile);
