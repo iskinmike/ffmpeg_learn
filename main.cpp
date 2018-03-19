@@ -33,8 +33,9 @@ extern "C" { // based on: https://stackoverflow.com/questions/24487203/ffmpeg-un
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libswscale/swscale.h>
-#include <avdevice.h> // header included from downloaded source fmpeg-2.18
+//#include <avdevice.h> // header included from downloaded source fmpeg-2.18
 #include <libavutil/imgutils.h>
+#include <libavdevice/avdevice.h> // installed libavdevice-dev
 }
 
 #include <SDL2/SDL.h>
@@ -72,12 +73,6 @@ void SaveFrame(AVFrame *pFrame, int width, int height, int iFrame) {
   // Close file
   fclose(pFile);
 }
-
-uint64_t g_pts = 0;
-uint64_t getNextPts(){
-    return g_pts++;
-};
-
 
 int main(int argc, char *argv[]){
     if(argc < 2) {
@@ -281,32 +276,33 @@ int main(int argc, char *argv[]){
         return -1; // Could not open codec
     }
 
-    AVFrame* frame = av_frame_alloc();//avcodec_alloc_frame();
-    if (!frame) {
-        fprintf(stderr, "Could not allocate video frame\n");
-        return -1;
-    }
-    frame->format = pEncodeCodecCtx->pix_fmt;
-    frame->width  = pEncodeCodecCtx->width;
-    frame->height = pEncodeCodecCtx->height;
-//    av_frame_get_buffer(frame, 32); // get buffer
+//    AVFrame* frame = av_frame_alloc();//avcodec_alloc_frame();
+//    if (!frame) {
+//        fprintf(stderr, "Could not allocate video frame\n");
+//        return -1;
+//    }
+//    frame->format = pEncodeCodecCtx->pix_fmt;
+//    frame->width  = pEncodeCodecCtx->width;
+//    frame->height = pEncodeCodecCtx->height;
+////    av_frame_get_buffer(frame, 32); // get buffer
 
-    /* the image can be allocated by any means and av_image_alloc() is
-          * just the most convenient way if av_malloc() is to be used */
+//    /* the image can be allocated by any means and av_image_alloc() is
+//          * just the most convenient way if av_malloc() is to be used */
 
-    int ret = av_image_alloc(frame->data, frame->linesize, pEncodeCodecCtx->width, pEncodeCodecCtx->height, pEncodeCodecCtx->pix_fmt, 32);
-    if (ret < 0) {
-     printf("Could not allocate raw picture buffer\n");
-     return -1;
-    }
+//    int ret = av_image_alloc(frame->data, frame->linesize, pEncodeCodecCtx->width, pEncodeCodecCtx->height, pEncodeCodecCtx->pix_fmt, 32);
+//    if (ret < 0) {
+//     printf("Could not allocate raw picture buffer\n");
+//     return -1;
+//    }
 
     int out_size = 0;
 
 //    std::vector<AVPacket> pkt_queue;
 
+    int i=0;
     printf("Ready to code/decode video\n");
     while(av_read_frame(pFormatCtx, &packet)>=0) {
-//    for (int i=0; i< 100; ++i){
+//    for ( i=0; i< 100; ++i){
 //        av_read_frame(pFormatCtx, &packet);
 
         // Is this a packet from the video stream?
@@ -341,7 +337,7 @@ int main(int argc, char *argv[]){
 //                } while (got_pack != 1);
 
 //                pkt_queue.push_back(tmp_pack);
-                printf("encoding frame %3d (size=%5d)  ---  pack size [%x] --- [%d]\n", i, out_size, tmp_pack.size, got_pack);
+                printf("encoding frame %3d (size=%5d)  ---  pack size [%x] --- [%d]\n", i++, out_size, tmp_pack.size, got_pack);
                 if (got_pack) {
                     fwrite(tmp_pack.data, 1, tmp_pack.size, pFile);
                 }
@@ -366,6 +362,17 @@ int main(int argc, char *argv[]){
                 SDL_RenderClear(renderer);
                 SDL_RenderCopy(renderer, texture, NULL, NULL);
                 SDL_RenderPresent(renderer);
+
+                SDL_PollEvent(&event);
+                switch(event.type) {
+                case SDL_SCANCODE_Q:
+                case SDL_QUIT:
+                  SDL_Quit();
+                  exit(0);
+                  break;
+                default:
+                  break;
+                }
 //                SaveFrame(pFrameRGB, pCodecCtx->width, pCodecCtx->height, i);
             }
         }
@@ -385,29 +392,28 @@ int main(int argc, char *argv[]){
 //        fwrite(el.data, 1, el.size, pFile);
 //    }
 
-    int i = 0;
-    out_size=1;
-    for(; out_size; i++) {
-//        fflush(stdout);
+//    out_size=1;
+//    for(; out_size; i++) {
+////        fflush(stdout);
 
-        int got_pack = 0;
-        AVPacket tmp_pack;
-        av_init_packet(&tmp_pack);
-        tmp_pack.data = NULL; // for autoinit
-        tmp_pack.size = 0;
-//        do {
-            out_size = avcodec_encode_video2(pEncodeCodecCtx, &tmp_pack, NULL, &got_pack);
-//        } while (got_pack != 1);
+//        int got_pack = 0;
+//        AVPacket tmp_pack;
+//        av_init_packet(&tmp_pack);
+//        tmp_pack.data = NULL; // for autoinit
+//        tmp_pack.size = 0;
+////        do {
+//            out_size = avcodec_encode_video2(pEncodeCodecCtx, &tmp_pack, NULL, &got_pack);
+////        } while (got_pack != 1);
 
-        printf("encoding frame %3d (size=%5d)  ---  pack size [%x]\n", i, out_size, tmp_pack.size);
-        fwrite(tmp_pack.data, 1, tmp_pack.size, pFile);
+//        printf("encoding frame %3d (size=%5d)  ---  pack size [%x]\n", i, out_size, tmp_pack.size);
+//        fwrite(tmp_pack.data, 1, tmp_pack.size, pFile);
 //        if (out_size != 0) {
 //            break;
 //        }
 //        out_size = avcodec_encode_video(pEncodeCodecCtx, outbuf, outbuf_size, NULL);
 //        printf("encoding frame %3d (size=%5d)\n", i, out_size);
 //        fwrite(outbuf, 1, out_size, pFile);
-    }
+//    }
 
     outbuf[0] = 0x00;
     outbuf[1] = 0x00;

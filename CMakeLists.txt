@@ -18,7 +18,6 @@ project ( ff_test CXX )
 
 set(AVCONV_INC "/usr/include/x86_64-linux-gnu")
 set(AVCONV_PATH "/usr/lib/x86_64-linux-gnu")
-set(LIBAVDEVICE_PATH "/home/mikhail/workspace/utils/ffmpeg-2.8.14/libavdevice")
 
 include_directories ( ${PROJECT_NAME}
         ${AVCONV_INC}
@@ -27,29 +26,26 @@ include_directories ( ${PROJECT_NAME}
 link_directories("${AVCONV_PATH}")
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11 -g")
+set(SOURCES
+    src/frame_keeper.cpp
+    src/decoder.cpp
+    src/encoder.cpp
+    src/display.cpp
+    src/video_api.cpp
+    src/api_usage.cpp)
 
-add_executable(${PROJECT_NAME} main.cpp)
+
+add_executable(${PROJECT_NAME} ${SOURCES})
 
 set(LIBS 
-#  ${AVCONV_PATH}/libavcodec-ffmpeg.so
-#  avformat
-#  avutil
   avformat
   avcodec
   swscale
-  /usr/lib/x86_64-linux-gnu/libavdevice-ffmpeg.so.56 # TODO
+  avdevice
   swresample
   avutil
   SDL2
-#  /lib/x86_64-linux-gnu/libbz2.so.1
-
-#  ${AVCONV_PATH}/libavdevice-ffmpeg.so.56
-#  avcodec
-#  avdevice
-#  avfilter
-#  avresample
-#  swresample
-#  postproc
+  pthread
   )
 
 target_link_libraries(${PROJECT_NAME} ${LIBS})
